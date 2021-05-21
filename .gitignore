@@ -1,0 +1,8 @@
+
+# KiCAD Autosave/backup files
+*/_autosave*
+*/*.sch-bak
+*/*.kicad_pcb-bak
+# Gerbers - should be regenerated based on the fabs capabilties
+*/gerbers/
+*/gerbers.zip

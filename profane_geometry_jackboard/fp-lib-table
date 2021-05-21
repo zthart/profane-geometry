@@ -1,0 +1,3 @@
+(fp_lib_table
+  (lib (name profane_geometry_jackboard)(type KiCad)(uri ${KIPRJMOD}/profane_geometry_jackboard.pretty)(options "")(descr ""))
+)
