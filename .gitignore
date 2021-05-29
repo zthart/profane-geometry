@@ -6,3 +6,6 @@
 # Gerbers - should be regenerated based on the fabs capabilties
 */gerbers/
 */gerbers.zip
+
+# Firmware builds
+firmware/target
