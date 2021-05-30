@@ -5,10 +5,15 @@ pub static ADC_SCALE: u16 = 6u16;
 use micromath::F32Ext;
 
 pub fn charge_voltage_for_frequency(frequency: u16) -> u16 {
-    let slope = 0.875f32;
-    let target_voltage = 8f32;
-    let max_frequency = 5_000u16;
+    let slope = 1.0f32;
+    let target_voltage = 10f32;
+
+    // this max frequency can be increased potentially by decreasing the 1M resistor for the fine tune (resulting in less fine control of pitch)
+    // but also by using the rack 5V supply for the DAC, since it's rail to rail (could also slightly decrease fine pitch control, but potentially to a lesser degree).
+    let max_frequency = 3_750u16;
+
     let max_dac_voltage = 3.3f32;
+
     let dac_resolution = u16::pow(2, 12) - 1;
 
     let calculated =

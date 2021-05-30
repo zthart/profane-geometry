@@ -13,7 +13,7 @@ use hal::entry;
 use hal::pac::{adc, Peripherals};
 use hal::pad::PadPin;
 use hal::prelude::*;
-use hal::pwm::{Channel, Pwm2};
+use hal::pwm::{Channel, Pwm1, Pwm2};
 use hal::sercom::I2CMaster4;
 use hal::time::KiloHertz;
 use hal::timer::TimerCounter;
@@ -22,33 +22,26 @@ use cortex_m::asm::delay as cycle_delay;
 
 mod utils;
 
-// We would typically need to care about the C2/C1/C0 and PD1/PD0 bits, but for fast
-// write mode, they're actually just all zero. So just masking the u16s down to 12-bit values
-// is good enough for us
-static DAC_BIT_MASK_12: u16 = 0b0000111111111111;
-static DAC_ADDRESS: u8 = 0b1100000;
+static DAC_ADDRESS: u8 = 0b01100000;
 
-fn dac_fast_write<I2C>(i2c: &mut I2C, ch_a: u16, ch_b: u16, ch_c: u16, ch_d: u16)
+static SINGLE_CHANNEL_WRITE: u8 = 0b01011000;
+static DAC_VREF: u8 = 1;
+static DAC_PD_MODE: u8 = 2;
+static DAC_OUTPUT_GAIN: u8 = 1;
+static DAC_MAX_VALUE: u16 = u16::pow(1, 12) - 1;
+
+fn dac_write_single_channel<I2C>(i2c: &mut I2C, ch_num: u8, value: u16)
 where
     I2C: embedded_hal::blocking::i2c::Write,
+    <I2C as embedded_hal::blocking::i2c::Write>::Error: core::fmt::Debug,
 {
-    let channels_as_bytes: [[u8; 2]; 4] = [
-        (ch_a & DAC_BIT_MASK_12).to_le_bytes(),
-        (ch_b & DAC_BIT_MASK_12).to_le_bytes(),
-        (ch_c & DAC_BIT_MASK_12).to_le_bytes(),
-        (ch_d & DAC_BIT_MASK_12).to_le_bytes(),
+    let write_bytes: [u8; 3] = [
+        SINGLE_CHANNEL_WRITE | ((ch_num & 0x3) << 1),
+        DAC_VREF << 7 | DAC_PD_MODE << 6 | DAC_OUTPUT_GAIN << 4 | (value >> 8 & 0xF) as u8,
+        (value & 0xFF) as u8,
     ];
 
-    let mut write_bytes: [u8; 8] = [0; 8];
-    let mut ins = 0;
-
-    for [msb, lsb] in channels_as_bytes.iter() {
-        write_bytes[ins] = *msb;
-        write_bytes[ins + 1] = *lsb;
-        ins += 2;
-    }
-
-    i2c.write(DAC_ADDRESS, &write_bytes);
+    i2c.write(DAC_ADDRESS, &write_bytes).unwrap();
 }
 
 #[entry]
@@ -75,7 +68,18 @@ fn main() -> ! {
     );
 
     let mut adc = Adc::adc(peripherals.ADC, &mut peripherals.PM, &mut clocks);
-    adc.samples(adc::avgctrl::SAMPLENUM_A::_8);
+
+    // Configure ADC
+    {
+        adc.samples(adc::avgctrl::SAMPLENUM_A::_4);
+        // On the dev hardware, I didn't wire up VREFA, so we'll wire our voltage ref to the VCC1 ref (which is VDDANA / 2)
+        adc.reference(adc::refctrl::REFSEL_A::INTVCC1);
+        // And we also have to compensate our gain to be /2 to get accurate readings
+        adc.gain(adc::inputctrl::GAIN_A::DIV2);
+    }
+
+    let tcc0_tcc1 = &clocks.tcc0_tcc1(&gclk0).unwrap();
+    let mut pwm1 = Pwm1::new(tcc0_tcc1, 1.khz(), peripherals.TCC1, &mut peripherals.PM);
 
     let tcc2_tc3 = &clocks.tcc2_tc3(&gclk0).unwrap();
     let mut pwm2 = Pwm2::new(tcc2_tc3, 1.khz(), peripherals.TCC2, &mut peripherals.PM);
@@ -87,48 +91,39 @@ fn main() -> ! {
 
     let _red_led = pins.d13.into_function_e(&mut pins.port);
 
+    // LEDs on sliders - should maybe send to pwm since they're kind of bright
     let mut notch_led = pins.d12.into_open_drain_output(&mut pins.port);
     let mut pulse_led = pins.d11.into_open_drain_output(&mut pins.port);
     let mut square_led = pins.d10.into_open_drain_output(&mut pins.port);
-    let mut tri_led = pins.d9.into_open_drain_output(&mut pins.port);
-
-    let _v_oct_scaled = pins.a3.into_function_b(&mut pins.port);
-    let _pulse_width_scaled = pins.a4.into_function_b(&mut pins.port);
-    let _pulse_pot = pins.a5.into_function_b(&mut pins.port);
-
-    let max_duty = pwm2.get_max_duty();
-    let max_adc_val = 4095u16;
-    let adc_duty_scale = max_duty / max_adc_val as u32;
-    let mut denom: u32 = 2;
-    let mut sign: i8 = 1;
+    let _tri_led = pins.d9.into_function_e(&mut pins.port);
 
     // Enable our slider LEDs
     {
         notch_led.set_high().unwrap();
         pulse_led.set_high().unwrap();
         square_led.set_high().unwrap();
-        tri_led.set_high().unwrap();
+        pwm1.set_duty(Channel::_1, pwm1.get_max_duty());
     }
 
+    // Analog ins, all ADC inputs need to be sent to function b
+    let _v_oct_scaled = pins.a3.into_function_b(&mut pins.port);
+    let _pulse_width_scaled = pins.a4.into_function_b(&mut pins.port);
+    let mut pulse_pot = pins.a5.into_function_b(&mut pins.port);
+
+    let max_duty = pwm2.get_max_duty();
+    let max_denom_val = 4u16;
+    let max_adc_val = 4095u16;
+    let slope = 1 / (max_adc_val / max_denom_val);
+
     loop {
-        if denom > 31 || denom < 2 {
-            sign *= -1
-        }
-        dac_fast_write(
-            &mut i2c,
-            utils::charge_voltage_for_frequency(440),
-            utils::charge_voltage_for_frequency(440),
-            2048u16, // this is pulse width, /should/ be scaled right in hardware that 0v is ~0% and 3.3v is 100% but, whomst is to say
-            0u16,    // unused
-        );
-        pwm2.set_duty(Channel::_1, max_duty / 2);
-        // This is too noisy, even at 8 sample averages- maybe I need a LUT of pitch reads -> timer freq?
-        // timer.start((a1result as u32*2).hz());
+        let pulse_pot_val: u16 = adc.read(&mut pulse_pot).unwrap();
+
+        dac_write_single_channel(&mut i2c, 0, DAC_MAX_VALUE - pulse_pot_val);
+        dac_write_single_channel(&mut i2c, 1, DAC_MAX_VALUE - pulse_pot_val);
+        dac_write_single_channel(&mut i2c, 2, 2048u16); //pwm
+
+        pwm2.set_duty(Channel::_1, pulse_pot_val as u32);
+        pwm1.set_duty(Channel::_1, pulse_pot_val as u32);
         cycle_delay(1024 * 1024);
-        if sign > 0 {
-            denom += 1
-        } else {
-            denom -= 1
-        }
     }
 }
