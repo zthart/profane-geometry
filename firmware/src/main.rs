@@ -14,9 +14,8 @@ use hal::pac::{adc, Peripherals};
 use hal::pad::PadPin;
 use hal::prelude::*;
 use hal::pwm::{Channel, Pwm1, Pwm2};
-use hal::sercom::I2CMaster4;
+use hal::sercom::{I2CError, I2CMaster4};
 use hal::time::KiloHertz;
-use hal::timer::TimerCounter;
 
 use cortex_m::asm::delay as cycle_delay;
 
@@ -32,8 +31,7 @@ static DAC_MAX_VALUE: u16 = u16::pow(1, 12) - 1;
 
 fn dac_write_single_channel<I2C>(i2c: &mut I2C, ch_num: u8, value: u16)
 where
-    I2C: embedded_hal::blocking::i2c::Write,
-    <I2C as embedded_hal::blocking::i2c::Write>::Error: core::fmt::Debug,
+    I2C: embedded_hal::blocking::i2c::Write<Error = I2CError>,
 {
     let write_bytes: [u8; 3] = [
         SINGLE_CHANNEL_WRITE | ((ch_num & 0x3) << 1),
@@ -41,7 +39,15 @@ where
         (value & 0xFF) as u8,
     ];
 
-    i2c.write(DAC_ADDRESS, &write_bytes).unwrap();
+    match i2c.write(DAC_ADDRESS, &write_bytes) {
+        Ok(_) => (),
+        Err(e) => match e {
+            // TODO: Handle some errors
+            I2CError::AddressError => (),
+            I2CError::Nack => (),
+            _ => (),
+        },
+    }
 }
 
 #[entry]
@@ -78,16 +84,15 @@ fn main() -> ! {
         adc.gain(adc::inputctrl::GAIN_A::DIV2);
     }
 
-    let tcc0_tcc1 = &clocks.tcc0_tcc1(&gclk0).unwrap();
-    let mut pwm1 = Pwm1::new(tcc0_tcc1, 1.khz(), peripherals.TCC1, &mut peripherals.PM);
+    let mut pwm1 = {
+        let tcc0_tcc1 = &clocks.tcc0_tcc1(&gclk0).unwrap();
+        Pwm1::new(tcc0_tcc1, 1.khz(), peripherals.TCC1, &mut peripherals.PM)
+    };
 
-    let tcc2_tc3 = &clocks.tcc2_tc3(&gclk0).unwrap();
-    let mut pwm2 = Pwm2::new(tcc2_tc3, 1.khz(), peripherals.TCC2, &mut peripherals.PM);
-
-    let mut timer = TimerCounter::tc3_(tcc2_tc3, peripherals.TC3, &mut peripherals.PM);
-    let _max_freq = 5000u16;
-    let note_freq = 440u16;
-    timer.start((note_freq as u32 * 2).hz());
+    let mut pwm2 = {
+        let tcc2_tc3 = &clocks.tcc2_tc3(&gclk0).unwrap();
+        Pwm2::new(tcc2_tc3, 1.khz(), peripherals.TCC2, &mut peripherals.PM)
+    };
 
     let _red_led = pins.d13.into_function_e(&mut pins.port);
 
@@ -109,11 +114,6 @@ fn main() -> ! {
     let _v_oct_scaled = pins.a3.into_function_b(&mut pins.port);
     let _pulse_width_scaled = pins.a4.into_function_b(&mut pins.port);
     let mut pulse_pot = pins.a5.into_function_b(&mut pins.port);
-
-    let max_duty = pwm2.get_max_duty();
-    let max_denom_val = 4u16;
-    let max_adc_val = 4095u16;
-    let slope = 1 / (max_adc_val / max_denom_val);
 
     loop {
         let pulse_pot_val: u16 = adc.read(&mut pulse_pot).unwrap();
