@@ -142,6 +142,7 @@ dependencies = [
 name = "feather_tests"
 version = "0.1.0"
 dependencies = [
+ "atsamd-hal",
  "atsamd21g",
  "cortex-m 0.7.2",
  "cortex-m-rt",
