@@ -1,33 +1,41 @@
 use atsamd_hal::clock::GenericClockController;
+use atsamd_hal::gpio::v2::{AlternateB, AnyPin};
 
 use atsamd21g as pac;
-use pac::adc::{avgctrl, inputctrl, refctrl};
-use pac::{ADC, PM};
+use pac::adc::{avgctrl, ctrlb, inputctrl, refctrl};
+use pac::{interrupt, ADC, PM};
+
+use embedded_hal::adc::Channel;
+
+use cortex_m::peripheral::NVIC;
 
 pub struct Adc<ADC> {
     adc: ADC,
 }
 
 impl Adc<ADC> {
-    pub fn adc(
+    pub fn configure(
         adc: ADC,
-        linearity: u8,
-        bias: u8,
         pm: &mut PM,
         clocks: &mut GenericClockController,
-    ) -> Self {
+    ) -> AdcBuilder<ADC> {
         pm.apbcmask.modify(|_, w| w.adc_().set_bit());
 
         let gclk0 = clocks.gclk0();
         clocks.adc(&gclk0).expect("adc clock setup failed");
         while adc.status.read().syncbusy().bit_is_set() {}
 
+        // Disable and reset the ADC
+        adc.ctrla.modify(|_, w| w.enable().clear_bit());
+        while adc.status.read().syncbusy().bit_is_set() {}
+
         adc.ctrla.modify(|_, w| w.swrst().set_bit());
         while adc.status.read().syncbusy().bit_is_set() {}
 
+        // Configure prescaler and resolution
         adc.ctrlb.modify(|_, w| {
             w.prescaler().div32();
-            w.ressel()._16bit()
+            w.ressel()._12bit()
         });
         while adc.status.read().syncbusy().bit_is_set() {}
 
@@ -37,26 +45,104 @@ impl Adc<ADC> {
         adc.inputctrl.modify(|_, w| w.muxneg().gnd());
         while adc.status.read().syncbusy().bit_is_set() {}
 
-        adc.avgctrl.modify(|_, w| {
-            w.samplenum().variant(avgctrl::SAMPLENUM_A::_32);
-            unsafe { w.adjres().bits(4) }
+        // Send our ADC into the builder with the following defaults:
+        // - Single samples
+        // - DIV2 Gain (because our reference is:)
+        // - INTVCC1 reference (which is VCC/2 = 1.65v)
+        let builder = AdcBuilder { adc };
+
+        builder
+            .with_samples(avgctrl::SAMPLENUM_A::_1)
+            .with_gain(inputctrl::GAIN_A::DIV2)
+            .with_reference(refctrl::REFSEL_A::INTVCC1)
+    }
+
+    pub fn read_result(&self) -> u16 {
+        self.adc.result.read().result().bits()
+    }
+
+    pub fn enable_interrupts(&self, nvic: &mut pac::NVIC) {
+        unsafe {
+            nvic.set_priority(interrupt::ADC, 1);
+            NVIC::unmask(interrupt::ADC)
+        }
+    }
+
+    pub fn register_inputs<PIN>(&mut self, pins: &mut [PIN])
+    where
+        PIN: Channel<ADC, ID = u8> + AnyPin<Mode = AlternateB>,
+    {
+        ()
+    }
+}
+
+pub struct AdcBuilder<ADC> {
+    adc: ADC,
+}
+
+impl AdcBuilder<ADC> {
+    pub fn with_samples(self, samplenum: avgctrl::SAMPLENUM_A) -> Self {
+        use avgctrl::SAMPLENUM_A;
+        self.adc.avgctrl.modify(|_, w| {
+            w.samplenum().variant(samplenum);
+            unsafe {
+                w.adjres().bits(match samplenum {
+                    SAMPLENUM_A::_1 => 0,
+                    SAMPLENUM_A::_2 => 1,
+                    SAMPLENUM_A::_4 => 2,
+                    SAMPLENUM_A::_8 => 3,
+                    _ => 4,
+                })
+            }
         });
-        while adc.status.read().syncbusy().bit_is_set() {}
 
-        adc.inputctrl
-            .modify(|_, w| w.gain().variant(inputctrl::GAIN_A::DIV2));
-        while adc.status.read().syncbusy().bit_is_set() {}
+        while self.adc.status.read().syncbusy().bit_is_set() {}
 
-        adc.refctrl
-            .modify(|_, w| w.refsel().variant(refctrl::REFSEL_A::INTVCC1));
-        while adc.status.read().syncbusy().bit_is_set() {}
+        self
+    }
 
-        adc.calib.modify(|_, w| unsafe {
-            w.bias_cal().bits(bias);
-            w.linearity_cal().bits(linearity)
+    pub fn with_gain(self, gain: inputctrl::GAIN_A) -> Self {
+        self.adc.inputctrl.modify(|_, w| w.gain().variant(gain));
+        while self.adc.status.read().syncbusy().bit_is_set() {}
+
+        self
+    }
+
+    pub fn with_reference(self, refsel: refctrl::REFSEL_A) -> Self {
+        self.adc.refctrl.modify(|_, w| w.refsel().variant(refsel));
+        while self.adc.status.read().syncbusy().bit_is_set() {}
+
+        self
+    }
+
+    pub fn with_calibration(self, bias_cal: u8, linearity_cal: u8) -> Self {
+        self.adc.calib.modify(|_, w| unsafe {
+            w.bias_cal().bits(bias_cal);
+            w.linearity_cal().bits(linearity_cal)
         });
-        while adc.status.read().syncbusy().bit_is_set() {}
+        while self.adc.status.read().syncbusy().bit_is_set() {}
 
-        Self { adc }
+        self
+    }
+
+    pub fn with_resolution(self, resolution: ctrlb::RESSEL_A) -> Self {
+        self.adc.ctrlb.modify(|_, w| w.ressel().variant(resolution));
+        while self.adc.status.read().syncbusy().bit_is_set() {}
+
+        self
+    }
+
+    pub fn with_reference_buffer(self) -> Self {
+        self.adc.refctrl.modify(|_, w| w.refcomp().set_bit());
+        while self.adc.status.read().syncbusy().bit_is_set() {}
+
+        self
+    }
+
+    pub fn enable(self) -> Adc<ADC> {
+        self.adc.ctrla.modify(|_, w| w.enable().set_bit());
+        while self.adc.status.read().syncbusy().bit_is_set() {}
+
+        Adc { adc: self.adc }
     }
 }

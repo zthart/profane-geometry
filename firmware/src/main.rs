@@ -7,20 +7,31 @@ use panic_halt as _;
 use panic_semihosting as _;
 
 use feather_m0 as hal;
-use hal::adc::Adc;
-use hal::clock::GenericClockController;
+
 use hal::entry;
-use hal::pac::{adc, Peripherals};
+use hal::pac;
+
+use hal::clock::GenericClockController;
+use hal::gpio::v2::{AlternateB, DynPin, Pin};
 use hal::pad::PadPin;
 use hal::prelude::*;
 use hal::pwm::{Channel, Pwm1, Pwm2};
 use hal::sercom::{I2CError, I2CMaster4};
 use hal::time::KiloHertz;
 
+use pac::{interrupt, CorePeripherals, Peripherals};
+
 use cortex_m::asm::delay as cycle_delay;
+
+use core::cell::RefCell;
+
+use cortex_m::interrupt::Mutex;
 
 mod dac;
 mod mcu;
+
+static ADC_INSTANCE: Mutex<RefCell<Option<mcu::adc::Adc<pac::ADC>>>> =
+    Mutex::new(RefCell::new(None));
 
 static DAC_ADDRESS: u8 = 0b01100000;
 
@@ -55,6 +66,8 @@ where
 #[entry]
 fn main() -> ! {
     let mut peripherals = Peripherals::take().unwrap();
+    let mut core = CorePeripherals::take().unwrap();
+
     let mut clocks = GenericClockController::with_external_32kosc(
         peripherals.GCLK,
         &mut peripherals.PM,
@@ -79,22 +92,31 @@ fn main() -> ! {
         )
     };
 
-    // Configure ADC
-    let mut adc = {
-        let mut adc_ = Adc::adc(peripherals.ADC, &mut peripherals.PM, &mut clocks);
+    {
+        use hal::pac::adc::{avgctrl, ctrlb};
+        use mcu::adc::Adc;
+        use mcu::calibration;
 
-        // I would potentially like to do multisampling and get a 16-bit value here, but I will have to re-implement Adc::adc or figure out
-        // how to modify peripherals.ADC after ^^^, because I need to get in an write some bits.
+        let adc_linearity = calibration::adc_linearity_cal();
+        let adc_bias = calibration::adc_bias_cal();
 
-        // ADJRES is updated automagically by .samples
-        adc_.samples(adc::avgctrl::SAMPLENUM_A::_32);
-        // On the dev hardware, I didn't wire up VREFA, so we'll wire our voltage ref to the VCC1 ref (which is VDDANA / 2)
-        adc_.reference(adc::refctrl::REFSEL_A::INTVCC1);
-        // And we also have to compensate our gain to be /2 to get accurate readings
-        adc_.gain(adc::inputctrl::GAIN_A::DIV2);
+        let adc_builder = Adc::configure(peripherals.ADC, &mut peripherals.PM, &mut clocks);
 
-        adc_
-    };
+        let adc = adc_builder
+            .with_calibration(adc_bias, adc_linearity)
+            .with_samples(avgctrl::SAMPLENUM_A::_32)
+            .with_resolution(ctrlb::RESSEL_A::_16BIT)
+            .with_reference_buffer()
+            .enable();
+
+        // Give up our adc and put it in the mutex
+        cortex_m::interrupt::free(|cs| ADC_INSTANCE.borrow(cs).replace(Some(adc)));
+        // Enable interrupts
+        cortex_m::interrupt::free(|cs| {
+            let adc = ADC_INSTANCE.borrow(cs).borrow();
+            adc.as_ref().unwrap().enable_interrupts(&mut core.NVIC);
+        });
+    }
 
     let mut pwm1 = {
         let tcc0_tcc1 = &clocks.tcc0_tcc1(&gclk0).unwrap();
@@ -129,26 +151,31 @@ fn main() -> ! {
     }
 
     // Analog ins, all ADC inputs need to be sent to function b
-    let _v_oct_scaled = pins.a3.into_function_b(&mut pins.port);
-    let mut pulse_width_scaled = pins.a4.into_function_b(&mut pins.port);
+    {
+        let v_oct_scaled: DynPin = pins.a3.into();
+        let pulse_cv_scaled: DynPin = pins.a4.into();
+        let pulse_pot: DynPin = pins.a5.into();
 
-    let mut pulse_pot = pins.a5.into_function_b(&mut pins.port);
-
+        let input_pints: [Pin<_, AlternateB>; 3];
+        // // V/Oct Scaled
+        // pins.a3.into_function_b(&mut pins.port);
+        // // Pulse width CV Scaled
+        // pins.a4.into_function_b(&mut pins.port);
+        // // Pulse width pot scaled
+        // pins.a5.into_function_b(&mut pins.port);
+    }
     let mut status_ctr = 0;
     let status_thresh = 16;
 
     loop {
-        let pulse_pot_val: u16 = adc.read(&mut pulse_pot).unwrap();
-        let pulse_cv_val: u16 = adc.read(&mut pulse_width_scaled).unwrap();
-
         if status_ctr == status_thresh {
             status_ctr = 0;
         }
 
-        dac_write_single_channel(&mut i2c, dac::Channel::_1, DAC_MAX_VALUE - pulse_pot_val);
-        dac_write_single_channel(&mut i2c, dac::Channel::_2, DAC_MAX_VALUE - pulse_pot_val);
+        // dac_write_single_channel(&mut i2c, dac::Channel::_1, DAC_MAX_VALUE - pulse_pot_val);
+        // dac_write_single_channel(&mut i2c, dac::Channel::_2, DAC_MAX_VALUE - pulse_pot_val);
 
-        dac_write_single_channel(&mut i2c, dac::Channel::_3, pulse_cv_val); //pwm
+        // dac_write_single_channel(&mut i2c, dac::Channel::_3, pulse_cv_val); //pwm
 
         if status_ctr == 0 {
             pwm2.set_duty(
@@ -161,13 +188,30 @@ fn main() -> ! {
                 },
             );
         }
-        pwm1.set_duty(
-            // Tri Slider LED
-            Channel::_1,
-            pwm1.get_max_duty() as u32 - (pulse_pot_val * 12) as u32,
-        );
+        // pwm1.set_duty(
+        //     // Tri Slider LED
+        //     Channel::_1,
+        //     pwm1.get_max_duty() as u32 - (pulse_pot_val * 12) as u32,
+        // );
 
         status_ctr += 1;
         cycle_delay(1024 * 1024);
     }
+}
+
+#[interrupt]
+fn ADC() {
+    // I read something somewhere that if you throw the static mut here you don't gotta use unsafe to mutate it maybe
+    // so lets see
+    static mut COUNTER: u8 = 0;
+
+    // The interrupt for the ADC is not enabled before the ADC is configured, so we don't need
+    // an if let here to ensure that we don't have a None sitting in the RefCell
+    let mut result: u16 = 0;
+    cortex_m::interrupt::free(|cs| {
+        let adc = ADC_INSTANCE.borrow(cs).borrow();
+        result = adc.as_ref().unwrap().read_result();
+    });
+
+    // now I need some way to shift which channel is being read by the ADC...
 }
