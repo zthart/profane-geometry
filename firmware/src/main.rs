@@ -12,7 +12,7 @@ use hal::entry;
 use hal::pac;
 
 use hal::clock::GenericClockController;
-use hal::gpio::v2::{AlternateB, DynPin, Pin};
+use hal::gpio::v2::{Output, PushPull, PA19};
 use hal::pad::PadPin;
 use hal::prelude::*;
 use hal::pwm::{Channel, Pwm1, Pwm2};
@@ -23,14 +23,24 @@ use pac::{interrupt, CorePeripherals, Peripherals};
 
 use cortex_m::asm::delay as cycle_delay;
 
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 
 use cortex_m::interrupt::Mutex;
+
+use micromath::F32Ext;
 
 mod dac;
 mod mcu;
 
+const TOTAL_INS: usize = 3;
+
 static ADC_INSTANCE: Mutex<RefCell<Option<mcu::adc::Adc<pac::ADC>>>> =
+    Mutex::new(RefCell::new(None));
+static ADC_CHANNELS: Mutex<RefCell<Option<[u8; TOTAL_INS]>>> = Mutex::new(RefCell::new(None));
+static ADC_RESULTS: Mutex<RefCell<[u16; TOTAL_INS]>> = Mutex::new(RefCell::new([0; TOTAL_INS]));
+static IN_CTR: Mutex<Cell<u8>> = Mutex::new(Cell::new(TOTAL_INS as u8));
+
+static INT_LED: Mutex<RefCell<Option<hal::gpio::Pin<PA19, Output<PushPull>>>>> =
     Mutex::new(RefCell::new(None));
 
 static DAC_ADDRESS: u8 = 0b01100000;
@@ -93,6 +103,32 @@ fn main() -> ! {
     };
 
     {
+        let mut notch_led = pins.d12.into_open_drain_output(&mut pins.port);
+        notch_led.set_low().unwrap();
+
+        cortex_m::interrupt::free(|cs| {
+            INT_LED.borrow(cs).replace(Some(notch_led));
+        });
+    }
+
+    // Analog ins, all ADC inputs need to be sent to function b
+    {
+        use mcu::adc::Adc;
+
+        let a3_ = pins.a3.into_function_b(&mut pins.port);
+        let a4_ = pins.a4.into_function_b(&mut pins.port);
+        let a5_ = pins.a5.into_function_b(&mut pins.port);
+
+        let input_channels: [u8; TOTAL_INS] = [
+            Adc::get_pin_channel(a3_),
+            Adc::get_pin_channel(a4_),
+            Adc::get_pin_channel(a5_),
+        ];
+
+        cortex_m::interrupt::free(|cs| ADC_CHANNELS.borrow(cs).replace(Some(input_channels)));
+    }
+
+    {
         use hal::pac::adc::{avgctrl, ctrlb};
         use mcu::adc::Adc;
         use mcu::calibration;
@@ -113,8 +149,13 @@ fn main() -> ! {
         cortex_m::interrupt::free(|cs| ADC_INSTANCE.borrow(cs).replace(Some(adc)));
         // Enable interrupts
         cortex_m::interrupt::free(|cs| {
+            let idx: usize = IN_CTR.borrow(cs).get().into();
+            let channel = ADC_CHANNELS.borrow(cs).borrow().as_ref().unwrap()[idx];
             let adc = ADC_INSTANCE.borrow(cs).borrow();
+            // enabled interrupts
             adc.as_ref().unwrap().enable_interrupts(&mut core.NVIC);
+            // begin
+            adc.as_ref().unwrap().scan_channel(channel);
         });
     }
 
@@ -137,40 +178,32 @@ fn main() -> ! {
     let _red_led = pins.d13.into_function_e(&mut pins.port);
 
     // LEDs on sliders - should maybe send to pwm since they're kind of bright
-    let mut notch_led = pins.d12.into_open_drain_output(&mut pins.port);
     let mut pulse_led = pins.d11.into_open_drain_output(&mut pins.port);
     let mut square_led = pins.d10.into_open_drain_output(&mut pins.port);
     let _tri_led = pins.d9.into_function_e(&mut pins.port);
 
     // Enable our slider LEDs
     {
-        notch_led.set_high().unwrap();
-        pulse_led.set_high().unwrap();
-        square_led.set_high().unwrap();
+        // pulse_led.set_high().unwrap();
+        // square_led.set_high().unwrap();
         pwm1.set_duty(Channel::_1, pwm1.get_max_duty());
     }
 
-    // Analog ins, all ADC inputs need to be sent to function b
-    {
-        let v_oct_scaled: DynPin = pins.a3.into();
-        let pulse_cv_scaled: DynPin = pins.a4.into();
-        let pulse_pot: DynPin = pins.a5.into();
-
-        let input_pints: [Pin<_, AlternateB>; 3];
-        // // V/Oct Scaled
-        // pins.a3.into_function_b(&mut pins.port);
-        // // Pulse width CV Scaled
-        // pins.a4.into_function_b(&mut pins.port);
-        // // Pulse width pot scaled
-        // pins.a5.into_function_b(&mut pins.port);
-    }
     let mut status_ctr = 0;
     let status_thresh = 16;
+    let pulse_pot_slope = 0.95f32;
 
     loop {
         if status_ctr == status_thresh {
             status_ctr = 0;
         }
+
+        let mut pot_result: u16 = 0;
+
+        cortex_m::interrupt::free(|cs| {
+            let results = ADC_RESULTS.borrow(cs).borrow();
+            pot_result = results[2].clone();
+        });
 
         // dac_write_single_channel(&mut i2c, dac::Channel::_1, DAC_MAX_VALUE - pulse_pot_val);
         // dac_write_single_channel(&mut i2c, dac::Channel::_2, DAC_MAX_VALUE - pulse_pot_val);
@@ -188,11 +221,26 @@ fn main() -> ! {
                 },
             );
         }
-        // pwm1.set_duty(
-        //     // Tri Slider LED
-        //     Channel::_1,
-        //     pwm1.get_max_duty() as u32 - (pulse_pot_val * 12) as u32,
-        // );
+        pwm1.set_duty(
+            // Tri Slider LED
+            Channel::_1,
+            pwm1.get_max_duty() as u32
+                - (if pot_result > u16::pow(2, 12) - u16::pow(2, 2) {
+                    pwm1.get_max_duty()
+                        - if status_ctr % 2 == 0 {
+                            u32::pow(2, 12)
+                        } else {
+                            u32::pow(2, 13)
+                        }
+                } else {
+                    pot_result as u32 * 11
+                }),
+        );
+        if pwm1.get_max_duty() <= (pulse_pot_slope * pot_result as f32 * 12f32).round() as u32 {
+            square_led.set_high().unwrap();
+        } else {
+            square_led.set_low().unwrap();
+        }
 
         status_ctr += 1;
         cycle_delay(1024 * 1024);
@@ -201,17 +249,33 @@ fn main() -> ! {
 
 #[interrupt]
 fn ADC() {
-    // I read something somewhere that if you throw the static mut here you don't gotta use unsafe to mutate it maybe
-    // so lets see
-    static mut COUNTER: u8 = 0;
-
-    // The interrupt for the ADC is not enabled before the ADC is configured, so we don't need
-    // an if let here to ensure that we don't have a None sitting in the RefCell
-    let mut result: u16 = 0;
     cortex_m::interrupt::free(|cs| {
         let adc = ADC_INSTANCE.borrow(cs).borrow();
-        result = adc.as_ref().unwrap().read_result();
-    });
+        let mut results = ADC_RESULTS.borrow(cs).borrow().clone();
+        let mut idx: usize = IN_CTR.borrow(cs).get().into();
 
-    // now I need some way to shift which channel is being read by the ADC...
+        if !adc.as_ref().unwrap().has_result() {
+            return;
+        }
+
+        // read the current result
+        let result = adc.as_ref().unwrap().read_result();
+        // store single result
+        results[idx] = result;
+        // replace global results
+        ADC_RESULTS.borrow(cs).replace(results);
+
+        // go next, as it were
+        idx = idx + 1;
+        if idx == TOTAL_INS {
+            idx = 0;
+        }
+        IN_CTR.borrow(cs).set(idx as u8); // replace
+
+        // shift to next channel for next interrupt call;
+        let channel = ADC_CHANNELS.borrow(cs).borrow().as_ref().unwrap()[idx];
+
+        // start scanning the next result
+        adc.as_ref().unwrap().scan_channel(channel);
+    });
 }

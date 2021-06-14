@@ -1,5 +1,4 @@
 use atsamd_hal::clock::GenericClockController;
-use atsamd_hal::gpio::v2::{AlternateB, AnyPin};
 
 use atsamd21g as pac;
 use pac::adc::{avgctrl, ctrlb, inputctrl, refctrl};
@@ -57,6 +56,17 @@ impl Adc<ADC> {
             .with_reference(refctrl::REFSEL_A::INTVCC1)
     }
 
+    pub fn get_pin_channel<PIN>(_pin: PIN) -> u8
+    where
+        PIN: Channel<ADC, ID = u8>,
+    {
+        PIN::channel()
+    }
+
+    pub fn has_result(&self) -> bool {
+        self.adc.intflag.read().resrdy().bit_is_set()
+    }
+
     pub fn read_result(&self) -> u16 {
         self.adc.result.read().result().bits()
     }
@@ -66,13 +76,16 @@ impl Adc<ADC> {
             nvic.set_priority(interrupt::ADC, 1);
             NVIC::unmask(interrupt::ADC)
         }
+        self.adc.intenset.modify(|_, w| w.resrdy().set_bit());
     }
 
-    pub fn register_inputs<PIN>(&mut self, pins: &mut [PIN])
-    where
-        PIN: Channel<ADC, ID = u8> + AnyPin<Mode = AlternateB>,
-    {
-        ()
+    pub fn scan_channel(&self, channel: u8) {
+        while self.adc.status.read().syncbusy().bit_is_set() {}
+        self.adc
+            .inputctrl
+            .modify(|_, w| unsafe { w.muxpos().bits(channel) });
+        while self.adc.status.read().syncbusy().bit_is_set() {}
+        self.adc.swtrig.modify(|_, w| w.start().set_bit());
     }
 }
 
