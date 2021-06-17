@@ -16,7 +16,7 @@ use hal::gpio::v2::{Output, PushPull, PA19};
 use hal::pad::PadPin;
 use hal::prelude::*;
 use hal::pwm::{Channel, Pwm1, Pwm2};
-use hal::sercom::{I2CError, I2CMaster4};
+use hal::sercom::I2CMaster4;
 use hal::time::KiloHertz;
 
 use pac::{interrupt, CorePeripherals, Peripherals};
@@ -29,7 +29,7 @@ use cortex_m::interrupt::Mutex;
 
 use micromath::F32Ext;
 
-mod dac;
+mod hw;
 mod mcu;
 
 const TOTAL_INS: usize = 3;
@@ -44,34 +44,6 @@ static INT_LED: Mutex<RefCell<Option<hal::gpio::Pin<PA19, Output<PushPull>>>>> =
     Mutex::new(RefCell::new(None));
 
 static DAC_ADDRESS: u8 = 0b01100000;
-
-static SINGLE_CHANNEL_WRITE: u8 = 0b01011000;
-static DAC_VREF: u8 = 1;
-static DAC_PD_MODE: u8 = 2;
-static DAC_OUTPUT_GAIN: u8 = 1;
-
-static DAC_MAX_VALUE: u16 = u16::pow(2, 12) - 1;
-
-fn dac_write_single_channel<I2C>(i2c: &mut I2C, channel: dac::Channel, value: u16)
-where
-    I2C: embedded_hal::blocking::i2c::Write<Error = I2CError>,
-{
-    let write_bytes: [u8; 3] = [
-        SINGLE_CHANNEL_WRITE | ((channel.as_channel_num() & 0x3) << 1),
-        DAC_VREF << 7 | DAC_PD_MODE << 6 | DAC_OUTPUT_GAIN << 4 | (value >> 8 & 0xF) as u8,
-        (value & 0xFF) as u8, // suspect
-    ];
-
-    match i2c.write(DAC_ADDRESS, &write_bytes) {
-        Ok(_) => (),
-        Err(e) => match e {
-            // TODO: Handle some errors
-            I2CError::AddressError => (), // If we try to connect to our DAC and it isn't at the address we expect it to be, do something
-            I2CError::Nack => (),         // If our dac fails to ACK some of our data, do something
-            _ => (), // The rest of the errors seem unlikely for us to run into, but hey who knows
-        },
-    }
-}
 
 #[entry]
 fn main() -> ! {
@@ -88,18 +60,22 @@ fn main() -> ! {
     let mut pins = hal::Pins::new(peripherals.PORT);
 
     // Configure i2c
-    let mut i2c = {
+    let mut dac = {
+        use hw::mcp4728::MCP4728;
+
         let i2c_sda = pins.a1.into_function_d(&mut pins.port);
         let i2c_scl = pins.a2.into_function_d(&mut pins.port);
 
-        I2CMaster4::new(
+        let i2c = I2CMaster4::new(
             &clocks.sercom4_core(&gclk0).unwrap(),
             KiloHertz(400),
             peripherals.SERCOM4,
             &mut peripherals.PM,
             i2c_sda.into_pad(&mut pins.port),
             i2c_scl.into_pad(&mut pins.port),
-        )
+        );
+
+        MCP4728::init(i2c, DAC_ADDRESS)
     };
 
     {
@@ -205,10 +181,10 @@ fn main() -> ! {
             pot_result = results[2].clone();
         });
 
-        // dac_write_single_channel(&mut i2c, dac::Channel::_1, DAC_MAX_VALUE - pulse_pot_val);
-        // dac_write_single_channel(&mut i2c, dac::Channel::_2, DAC_MAX_VALUE - pulse_pot_val);
-
-        // dac_write_single_channel(&mut i2c, dac::Channel::_3, pulse_cv_val); //pwm
+        // haha jonathan you are ~banging my daughter~ wiring your pots backwards 🙃
+        dac.write_single_channel(hw::mcp4728::Channel::_1, dac.get_max_value() - pot_result);
+        dac.write_single_channel(hw::mcp4728::Channel::_2, dac.get_max_value() - pot_result);
+        dac.write_single_channel(hw::mcp4728::Channel::_3, pot_result);
 
         if status_ctr == 0 {
             pwm2.set_duty(
