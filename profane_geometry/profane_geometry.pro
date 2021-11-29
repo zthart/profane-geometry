@@ -1,4 +1,4 @@
-update=5/11/2021 10:43:07 PM
+update=11/26/21 20:51:28
 version=1
 last_client=kicad
 [general]
@@ -18,7 +18,7 @@ PageLayoutDescrFile=
 PlotDirectoryName=
 SubpartIdSeparator=0
 SubpartFirstId=65
-NetFmtName=
+NetFmtName=Pcbnew
 SpiceAjustPassiveValues=0
 LabSize=50
 ERC_TestSimilarLabels=1
@@ -38,7 +38,7 @@ MinViaDrill=0.3
 MinMicroViaDiameter=0.2
 MinMicroViaDrill=0.09999999999999999
 MinHoleToHole=0.25
-TrackWidth1=0.25
+TrackWidth1=0.2
 ViaDiameter1=0.8
 ViaDrill1=0.4
 dPairWidth1=0.2
@@ -237,8 +237,8 @@ Enabled=0
 [pcbnew/Netclasses]
 [pcbnew/Netclasses/Default]
 Name=Default
-Clearance=0.2
-TrackWidth=0.25
+Clearance=0.15
+TrackWidth=0.2
 ViaDiameter=0.8
 ViaDrill=0.4
 uViaDiameter=0.3
@@ -248,8 +248,19 @@ dPairGap=0.25
 dPairViaGap=0.25
 [pcbnew/Netclasses/1]
 Name=12V or -12V
-Clearance=0.4
-TrackWidth=1
+Clearance=0.15
+TrackWidth=0.4
+ViaDiameter=0.8
+ViaDrill=0.4
+uViaDiameter=0.3
+uViaDrill=0.1
+dPairWidth=0.2
+dPairGap=0.25
+dPairViaGap=0.25
+[pcbnew/Netclasses/2]
+Name=Mix Bus
+Clearance=0.15
+TrackWidth=0.6
 ViaDiameter=0.8
 ViaDrill=0.4
 uViaDiameter=0.3
