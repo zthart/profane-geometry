@@ -45,6 +45,62 @@ static INT_LED: Mutex<RefCell<Option<hal::gpio::Pin<PA19, Output<PushPull>>>>> =
 
 static DAC_ADDRESS: u8 = 0b01100000;
 
+static PG_INPUTS: Mutex<RefCell<Option<[ProGeoAnalogIn; TOTAL_INS]>>> =
+    Mutex::new(RefCell::new(None));
+
+// TODO(zach) - store this struct as inputs, don't reference ADC_RESULTS in main loop, keep critical sections in
+// functions within this impl
+struct ProGeoAnalogIn {
+    /// The zero-indexed number of this input. This represents the index of this input in both the ADC_CHANNELS and
+    /// ADC_RESULTS array, so that a given named AnalogIn struct can be used to fetch the current result, rather than
+    /// relying on knowing "input x is index 0 is channel _y_ is pin whatever."
+    num: usize,
+
+    /// The result of the `channel()` associated func of the Channel trait provided by embedded_hal.
+    ///
+    /// Requiring the calling code handle fetching these values is an intentional design choice, due to the really funky
+    /// nature of the type erasure provided by the atsamd_hal crate. I'm sure with some more effort I could get around
+    /// that with an `AnyPin + Channel` implementation here, but this seems simple enough for the moment
+    channel: u8,
+}
+
+impl ProGeoAnalogIn {
+    /// Retrieve the current result for this input from the RefCell.
+    ///
+    /// This function enters a critical section.
+    fn get_current_result(self) -> u16 {
+        cortex_m::interrupt::free(|cs| {
+            let results = ADC_RESULTS.borrow(cs).borrow();
+            results[self.num].clone()
+        })
+    }
+}
+
+fn pg_create_inputs(mut pins: hal::Pins) {
+    use mcu::adc::Adc;
+
+    let a3_ = pins.a3.into_function_b(&mut pins.port); // v/oct scaled
+    let a4_ = pins.a4.into_function_b(&mut pins.port); // pulse scaled
+    let a5_ = pins.a5.into_function_b(&mut pins.port); // pulse pot
+
+    cortex_m::interrupt::free(|cs| {
+        PG_INPUTS.borrow(cs).replace(Some([
+            ProGeoAnalogIn {
+                num: 0,
+                channel: Adc::get_pin_channel(a3_),
+            },
+            ProGeoAnalogIn {
+                num: 1,
+                channel: Adc::get_pin_channel(a4_),
+            },
+            ProGeoAnalogIn {
+                num: 2,
+                channel: Adc::get_pin_channel(a5_),
+            },
+        ]));
+    })
+}
+
 #[entry]
 fn main() -> ! {
     let mut peripherals = Peripherals::take().unwrap();
@@ -91,9 +147,9 @@ fn main() -> ! {
     {
         use mcu::adc::Adc;
 
-        let a3_ = pins.a3.into_function_b(&mut pins.port);
-        let a4_ = pins.a4.into_function_b(&mut pins.port);
-        let a5_ = pins.a5.into_function_b(&mut pins.port);
+        let a3_ = pins.a3.into_function_b(&mut pins.port); // v/oct scaled
+        let a4_ = pins.a4.into_function_b(&mut pins.port); // pulse scaled
+        let a5_ = pins.a5.into_function_b(&mut pins.port); // pulse pot
 
         let input_channels: [u8; TOTAL_INS] = [
             Adc::get_pin_channel(a3_),
@@ -175,16 +231,22 @@ fn main() -> ! {
         }
 
         let mut pot_result: u16 = 0;
+        let mut pitch_scaled_result: u16 = 0;
+        let mut pwm_scaled_result: u16 = 0;
 
         cortex_m::interrupt::free(|cs| {
             let results = ADC_RESULTS.borrow(cs).borrow();
+            pitch_scaled_result = results[0].clone(); // probably should have some struct that can hold the index at which i'm storing these values
+            pwm_scaled_result = results[1].clone();
             pot_result = results[2].clone();
         });
 
         // haha jonathan you are ~banging my daughter~ wiring your pots backwards 🙃
+        // dac.write_single_channel(hw::mcp4728::Channel::_1, pitch_scaled_result);
+        // dac.write_single_channel(hw::mcp4728::Channel::_2, pitch_scaled_result);
         dac.write_single_channel(hw::mcp4728::Channel::_1, dac.get_max_value() - pot_result);
         dac.write_single_channel(hw::mcp4728::Channel::_2, dac.get_max_value() - pot_result);
-        dac.write_single_channel(hw::mcp4728::Channel::_3, pot_result);
+        dac.write_single_channel(hw::mcp4728::Channel::_3, pot_result); // need to determine how to decide what source for pwm we should use
 
         if status_ctr == 0 {
             pwm2.set_duty(
@@ -227,9 +289,12 @@ fn main() -> ! {
 fn ADC() {
     cortex_m::interrupt::free(|cs| {
         let adc = ADC_INSTANCE.borrow(cs).borrow();
+        // Is making a copy here good or bad or neutral?
         let mut results = ADC_RESULTS.borrow(cs).borrow().clone();
+        // Hold as usize here since it's mostly used to slice arrays
         let mut idx: usize = IN_CTR.borrow(cs).get().into();
 
+        // Shouldn't really be the case ever, but just in case
         if !adc.as_ref().unwrap().has_result() {
             return;
         }
