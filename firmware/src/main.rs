@@ -6,14 +6,14 @@ use panic_halt as _;
 #[cfg(feature = "use_semihosting")]
 use panic_semihosting as _;
 
-use feather_m0 as hal;
+use bsp::hal;
+use bsp::pac;
+use feather_m0 as bsp;
 
-use hal::entry;
-use hal::pac;
+use bsp::entry;
 
 use hal::clock::GenericClockController;
-use hal::gpio::v2::{Output, PushPull, PA19};
-use hal::pad::PadPin;
+use hal::gpio::v2::*;
 use hal::prelude::*;
 use hal::pwm::{Channel, Pwm1, Pwm2};
 use hal::sercom::I2CMaster4;
@@ -40,7 +40,7 @@ static ADC_CHANNELS: Mutex<RefCell<Option<[u8; TOTAL_INS]>>> = Mutex::new(RefCel
 static ADC_RESULTS: Mutex<RefCell<[u16; TOTAL_INS]>> = Mutex::new(RefCell::new([0; TOTAL_INS]));
 static IN_CTR: Mutex<Cell<u8>> = Mutex::new(Cell::new(TOTAL_INS as u8));
 
-static INT_LED: Mutex<RefCell<Option<hal::gpio::Pin<PA19, Output<PushPull>>>>> =
+static INT_LED: Mutex<RefCell<Option<Pin<PA19, Output<PushPull>>>>> =
     Mutex::new(RefCell::new(None));
 
 static DAC_ADDRESS: u8 = 0b01100000;
@@ -76,12 +76,16 @@ impl ProGeoAnalogIn {
     }
 }
 
-fn pg_create_inputs(mut pins: hal::Pins) {
+fn pg_create_inputs(mut pins: bsp::Pins) {
     use mcu::adc::Adc;
 
-    let a3_ = pins.a3.into_function_b(&mut pins.port); // v/oct scaled
-    let a4_ = pins.a4.into_function_b(&mut pins.port); // pulse scaled
-    let a5_ = pins.a5.into_function_b(&mut pins.port); // pulse pot
+    //PA04
+    //PA05
+    //PB02
+
+    let a3_ = pins.a3.into_alternate::<B>(); // v/oct scaled
+    let a4_ = pins.a4.into_alternate::<B>(); // pulse scaled
+    let a5_ = pins.a5.into_alternate::<B>(); // pulse pot
 
     cortex_m::interrupt::free(|cs| {
         PG_INPUTS.borrow(cs).replace(Some([
@@ -113,29 +117,29 @@ fn main() -> ! {
         &mut peripherals.NVMCTRL,
     );
     let gclk0 = clocks.gclk0();
-    let mut pins = hal::Pins::new(peripherals.PORT);
+    let pins = bsp::Pins::new(peripherals.PORT);
 
     // Configure i2c
     let mut dac = {
         use hw::mcp4728::MCP4728;
 
-        let i2c_sda = pins.a1.into_function_d(&mut pins.port);
-        let i2c_scl = pins.a2.into_function_d(&mut pins.port);
+        let i2c_sda = pins.a1.into_alternate::<D>();
+        let i2c_scl = pins.a2.into_alternate::<D>();
 
         let i2c = I2CMaster4::new(
             &clocks.sercom4_core(&gclk0).unwrap(),
             KiloHertz(400),
             peripherals.SERCOM4,
             &mut peripherals.PM,
-            i2c_sda.into_pad(&mut pins.port),
-            i2c_scl.into_pad(&mut pins.port),
+            i2c_sda,
+            i2c_scl,
         );
 
         MCP4728::init(i2c, DAC_ADDRESS)
     };
 
     {
-        let mut notch_led = pins.d12.into_open_drain_output(&mut pins.port);
+        let mut notch_led: Pin<PA19, PushPullOutput> = pins.d12.into();
         notch_led.set_low().unwrap();
 
         cortex_m::interrupt::free(|cs| {
@@ -147,9 +151,9 @@ fn main() -> ! {
     {
         use mcu::adc::Adc;
 
-        let a3_ = pins.a3.into_function_b(&mut pins.port); // v/oct scaled
-        let a4_ = pins.a4.into_function_b(&mut pins.port); // pulse scaled
-        let a5_ = pins.a5.into_function_b(&mut pins.port); // pulse pot
+        let a3_ = pins.a3.into_alternate::<B>(); // v/oct scaled
+        let a4_ = pins.a4.into_alternate::<B>(); // pulse scaled
+        let a5_ = pins.a5.into_alternate::<B>(); // pulse pot
 
         let input_channels: [u8; TOTAL_INS] = [
             Adc::get_pin_channel(a3_),
@@ -207,12 +211,11 @@ fn main() -> ! {
         pwm2
     };
 
-    let _red_led = pins.d13.into_function_e(&mut pins.port);
+    let _red_led: Pin<PA17, AlternateE> = pins.d13.into();
 
-    // LEDs on sliders - should maybe send to pwm since they're kind of bright
-    let mut pulse_led = pins.d11.into_open_drain_output(&mut pins.port);
-    let mut square_led = pins.d10.into_open_drain_output(&mut pins.port);
-    let _tri_led = pins.d9.into_function_e(&mut pins.port);
+    let mut pulse_led = pins.d11.into_push_pull_output();
+    let mut square_led = pins.d10.into_push_pull_output();
+    let _tri_led = pins.d9.into_alternate::<E>();
 
     // Enable our slider LEDs
     {

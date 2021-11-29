@@ -1,6 +1,8 @@
 use atsamd_hal::clock::GenericClockController;
 
-use atsamd21g as pac;
+use bsp::pac;
+use feather_m0 as bsp;
+
 use pac::adc::{avgctrl, ctrlb, inputctrl, refctrl};
 use pac::{interrupt, ADC, PM};
 
