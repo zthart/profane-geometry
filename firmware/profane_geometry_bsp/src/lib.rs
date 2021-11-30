@@ -1,3 +1,20 @@
+//! Board support crate for the Profane Geometry Eurorack Module
+//! 
+//! Profane geometry is an atsamd21-based open-source triangle-based quad-oscillator module, with firmware written 
+//! in rust (obviously). This BSP (Board support package) is based on the work by the lovely people at [atsamd-rs](https://github.com/atsamd-rs),
+//! and depends on the `atsamd-hal` HAL (hardware abstraction layer) and atsamd21g PAC (peripheral access crate). Check
+//! out these packages to get some more info.
+//! 
+//! # How to use
+//! 
+//! ```
+//! use profane_geometry_bsp as bsp;
+//! use bsp:hal;
+//! use bsp:pac;
+//! 
+//! // Now you have each of your bsp, hal, and pac modules available!
+//! ```
+
 #![no_std]
 
 #[cfg(feature = "rt")]
@@ -13,7 +30,7 @@ pub mod pins {
 
     hal::bsp_pins!(
         PA02 {
-            // Scaled V/Oct input        
+            /// Scaled V/Oct input        
             name: v_oct,
             aliases: {
                 AlternateB: VOct
@@ -27,7 +44,7 @@ pub mod pins {
             /// Scaled logic level input for the PWM cv jack
             name: pwm_cv,
             aliases: {
-                AlternateB: PwmCV
+                AlternateB: PwmCv
             }
         }
         PA05 {
@@ -71,6 +88,7 @@ pub mod pins {
             }
         }
         PB11 {
+            /// Wiper LED for the notch wave slider
             name: nt_slider_led,
             aliases: {
                 PushPullOutput: NtSliderLed,
@@ -78,12 +96,14 @@ pub mod pins {
             }
         }
         PA12 {
+            /// Data pin for the I2C master used for the DAC
             name: dac_sda,
             aliases: {
                 AlternateD: DacSda
             }
         }
         PA13 {
+            /// Clock pin for the I2C master used for the DAC
             name: dac_scl,
             aliases: {
                 AlternateD: DacScl
@@ -92,12 +112,14 @@ pub mod pins {
         // PA14 NC
         // PA15 NC
         PA16 {
+            /// Data pin for the I2C master used for RGB LEDs on the jackboard
             name: rgb_sda,
             aliases: {
                 AlternateC: RgbSda
             }
         }
         PA17 {
+            /// Clock pin for the I2C master used for RGB LEDs on the jackboard
             name: rgb_scl,
             aliases: {
                 AlternateC: RgbScl
@@ -106,6 +128,7 @@ pub mod pins {
         // PA18 NC
         // PA19 NC
         PA20 {
+            /// The red shine-through power LED, PWM capable
             name: power_led,
             aliases: {
                 PushPullOutput: PowerLed,
@@ -114,12 +137,14 @@ pub mod pins {
         }
         // PA21 - PA23 NC
         PA24 {
+            /// The D- pin for the USB connection
             name: usb_dm,
             aliases: {
                 AlternateG: UsbDm
             }
         }
         PA25 {
+            /// The D+ pin for the USB connection
             name: usb_dp,
             aliases: {
                 AlternateG: UsbDp
@@ -127,9 +152,11 @@ pub mod pins {
         }
         // PA27 - PA28 NC
         PA30 {
+            /// SWCLK - Debug interface exposed via the tagconnect footprint
             name: swclk
         }
         PA31 {
+            /// SWDIO - Debug interface exposed via the tagconnect footprint
             name: swdio
         }
 
@@ -139,4 +166,5 @@ pub mod pins {
         // PB12 - PB23 NC
     );
 }
+
 pub use pins::*;

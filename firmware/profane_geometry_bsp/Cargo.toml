@@ -3,6 +3,8 @@ name = "profane_geometry_bsp"
 version = "0.1.0"
 authors = ["Zach Hart <zthart96@gmail.com>"]
 description = "Board Support crate for the Profane Geometry eurorack module"
+repository = "https://github.com/zthart/profane-geometry"
+license = "GPL-3.0-only"
 edition = "2018"
 
 [dependencies.cortex-m-rt]

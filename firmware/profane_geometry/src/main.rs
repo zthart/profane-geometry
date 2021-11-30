@@ -40,7 +40,7 @@ static ADC_RESULTS: Mutex<RefCell<[u16; TOTAL_INS]>> = Mutex::new(RefCell::new([
 static IN_CTR: Mutex<Cell<u8>> = Mutex::new(Cell::new(TOTAL_INS as u8));
 
 // A nice little convenience here lets us ignore both the full pin name (e.g. PA11, PB10, etc.)
-// _and_ the exact pin configuration (into_alternate::<Some Alternate>() or into_push_pull_output()).
+// _and_ the exact pin configuration (into_alternate::<A>() or into_push_pull_output()).
 // Within our BSP we can set these aliases for specific pins in specific modes, and then coerce things into()
 // the appropriate type nicely.
 //
@@ -85,7 +85,7 @@ fn pg_create_inputs(mut pins: bsp::Pins) {
     use mcu::adc::Adc;
 
     let v_oct_: bsp::VOct = pins.v_oct.into(); // v/oct scaled
-    let pwm_cv_: bsp::PwmCV = pins.pwm_cv.into(); // pulse scaled
+    let pwm_cv_: bsp::PwmCv = pins.pwm_cv.into(); // pulse scaled
     let pwm_pot_: bsp::PwmPot=  pins.pwm_pot.into(); // pulse pot
 
     cortex_m::interrupt::free(|cs| {
@@ -153,7 +153,7 @@ fn main() -> ! {
         use mcu::adc::Adc;
 
         let v_oct_: bsp::VOct = pins.v_oct.into(); // v/oct scaled
-        let pwm_cv_: bsp::PwmCV = pins.pwm_cv.into(); // pulse scaled
+        let pwm_cv_: bsp::PwmCv = pins.pwm_cv.into(); // pulse scaled
         let pwm_pot_: bsp::PwmPot=  pins.pwm_pot.into(); // pulse pot
 
         let input_channels: [u8; TOTAL_INS] = [
