@@ -7,11 +7,11 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-feather_m0 = {version = "0.10", features = ["unproven", "express"]}
+profane_geometry_bsp = { path = "../profane_geometry_bsp", features = ["unproven"]}
 atsamd21g = {version = "0.11", features = ["rt"]}
 atsamd-hal = {version = "0.13", features = ["samd21", "min-samd21g"]}
 panic-halt = "0.2"
-cortex-m = "0.7"
+cortex-m = "0.6"
 cortex-m-rt = "0.6"
 micromath = "1.1"
 embedded-hal = "0.2"

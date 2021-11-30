@@ -8,12 +8,11 @@ use panic_semihosting as _;
 
 use bsp::hal;
 use bsp::pac;
-use feather_m0 as bsp;
+use profane_geometry_bsp as bsp;
 
 use bsp::entry;
 
 use hal::clock::GenericClockController;
-use hal::gpio::v2::*;
 use hal::prelude::*;
 use hal::pwm::{Channel, Pwm1, Pwm2};
 use hal::sercom::I2CMaster4;
@@ -40,7 +39,13 @@ static ADC_CHANNELS: Mutex<RefCell<Option<[u8; TOTAL_INS]>>> = Mutex::new(RefCel
 static ADC_RESULTS: Mutex<RefCell<[u16; TOTAL_INS]>> = Mutex::new(RefCell::new([0; TOTAL_INS]));
 static IN_CTR: Mutex<Cell<u8>> = Mutex::new(Cell::new(TOTAL_INS as u8));
 
-static INT_LED: Mutex<RefCell<Option<Pin<PA19, Output<PushPull>>>>> =
+// A nice little convenience here lets us ignore both the full pin name (e.g. PA11, PB10, etc.)
+// _and_ the exact pin configuration (into_alternate::<Some Alternate>() or into_push_pull_output()).
+// Within our BSP we can set these aliases for specific pins in specific modes, and then coerce things into()
+// the appropriate type nicely.
+//
+// If we want to use pwm here, we could use bsp::NtSliderLedPwm instead.
+static INT_LED: Mutex<RefCell<Option<bsp::NtSliderLed>>> =
     Mutex::new(RefCell::new(None));
 
 static DAC_ADDRESS: u8 = 0b01100000;
@@ -79,27 +84,23 @@ impl ProGeoAnalogIn {
 fn pg_create_inputs(mut pins: bsp::Pins) {
     use mcu::adc::Adc;
 
-    //PA04
-    //PA05
-    //PB02
-
-    let a3_ = pins.a3.into_alternate::<B>(); // v/oct scaled
-    let a4_ = pins.a4.into_alternate::<B>(); // pulse scaled
-    let a5_ = pins.a5.into_alternate::<B>(); // pulse pot
+    let v_oct_: bsp::VOct = pins.v_oct.into(); // v/oct scaled
+    let pwm_cv_: bsp::PwmCV = pins.pwm_cv.into(); // pulse scaled
+    let pwm_pot_: bsp::PwmPot=  pins.pwm_pot.into(); // pulse pot
 
     cortex_m::interrupt::free(|cs| {
         PG_INPUTS.borrow(cs).replace(Some([
             ProGeoAnalogIn {
                 num: 0,
-                channel: Adc::get_pin_channel(a3_),
+                channel: Adc::get_pin_channel(v_oct_),
             },
             ProGeoAnalogIn {
                 num: 1,
-                channel: Adc::get_pin_channel(a4_),
+                channel: Adc::get_pin_channel(pwm_cv_),
             },
             ProGeoAnalogIn {
                 num: 2,
-                channel: Adc::get_pin_channel(a5_),
+                channel: Adc::get_pin_channel(pwm_pot_),
             },
         ]));
     })
@@ -123,8 +124,8 @@ fn main() -> ! {
     let mut dac = {
         use hw::mcp4728::MCP4728;
 
-        let i2c_sda = pins.a1.into_alternate::<D>();
-        let i2c_scl = pins.a2.into_alternate::<D>();
+        let i2c_sda: bsp::DacSda = pins.dac_sda.into();
+        let i2c_scl: bsp::DacScl = pins.dac_scl.into();
 
         let i2c = I2CMaster4::new(
             &clocks.sercom4_core(&gclk0).unwrap(),
@@ -139,7 +140,7 @@ fn main() -> ! {
     };
 
     {
-        let mut notch_led: Pin<PA19, PushPullOutput> = pins.d12.into();
+        let mut notch_led = pins.nt_slider_led.into_push_pull_output();
         notch_led.set_low().unwrap();
 
         cortex_m::interrupt::free(|cs| {
@@ -151,14 +152,14 @@ fn main() -> ! {
     {
         use mcu::adc::Adc;
 
-        let a3_ = pins.a3.into_alternate::<B>(); // v/oct scaled
-        let a4_ = pins.a4.into_alternate::<B>(); // pulse scaled
-        let a5_ = pins.a5.into_alternate::<B>(); // pulse pot
+        let v_oct_: bsp::VOct = pins.v_oct.into(); // v/oct scaled
+        let pwm_cv_: bsp::PwmCV = pins.pwm_cv.into(); // pulse scaled
+        let pwm_pot_: bsp::PwmPot=  pins.pwm_pot.into(); // pulse pot
 
         let input_channels: [u8; TOTAL_INS] = [
-            Adc::get_pin_channel(a3_),
-            Adc::get_pin_channel(a4_),
-            Adc::get_pin_channel(a5_),
+            Adc::get_pin_channel(v_oct_),
+            Adc::get_pin_channel(pwm_cv_),
+            Adc::get_pin_channel(pwm_pot_),
         ];
 
         cortex_m::interrupt::free(|cs| ADC_CHANNELS.borrow(cs).replace(Some(input_channels)));
@@ -211,11 +212,11 @@ fn main() -> ! {
         pwm2
     };
 
-    let _red_led: Pin<PA17, AlternateE> = pins.d13.into();
+    let _red_led: bsp::PowerLedPwm = pins.power_led.into();
 
-    let mut pulse_led = pins.d11.into_push_pull_output();
-    let mut square_led = pins.d10.into_push_pull_output();
-    let _tri_led = pins.d9.into_alternate::<E>();
+    let mut pulse_led: bsp::PlsSliderLed = pins.pls_slider_led.into();
+    let mut square_led: bsp::SqSliderLed = pins.sq_slider_led.into();
+    let _tri_led: bsp::TriSliderLedPwm = pins.tri_slider_led.into();
 
     // Enable our slider LEDs
     {

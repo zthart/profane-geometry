@@ -10,4 +10,4 @@
 */*.pdf
 
 # Firmware builds
-firmware/target
+firmware/**/target
