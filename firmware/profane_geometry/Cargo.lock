@@ -172,20 +172,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "feather_tests"
-version = "0.1.0"
-dependencies = [
- "atsamd-hal",
- "atsamd21g 0.11.0",
- "cortex-m 0.6.7",
- "cortex-m-rt 0.6.13",
- "embedded-hal",
- "micromath",
- "panic-halt",
- "profane_geometry_bsp",
-]
-
-[[package]]
 name = "generic-array"
 version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -283,6 +269,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a152013215dca273577e18d2bf00fa862b89b24169fb78c4c95aeb07992c9cec"
 dependencies = [
  "unicode-xid",
+]
+
+[[package]]
+name = "profane_geometry"
+version = "0.1.0"
+dependencies = [
+ "atsamd-hal",
+ "atsamd21g 0.11.0",
+ "cortex-m 0.6.7",
+ "cortex-m-rt 0.6.13",
+ "embedded-hal",
+ "micromath",
+ "panic-halt",
+ "profane_geometry_bsp",
 ]
 
 [[package]]

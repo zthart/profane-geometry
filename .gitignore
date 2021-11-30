@@ -11,3 +11,4 @@
 
 # Firmware builds
 firmware/**/target
+*.bin

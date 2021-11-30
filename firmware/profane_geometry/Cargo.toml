@@ -1,5 +1,5 @@
 [package]
-name = "feather_tests"
+name = "profane_geometry"
 version = "0.1.0"
 authors = ["Zachary Hart <zthart96@gmail.com>"]
 edition = "2018"

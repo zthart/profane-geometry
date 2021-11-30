@@ -1,7 +1,7 @@
 use atsamd_hal::clock::GenericClockController;
 
 use bsp::pac;
-use feather_m0 as bsp;
+use profane_geometry_bsp as bsp;
 
 use pac::adc::{avgctrl, ctrlb, inputctrl, refctrl};
 use pac::{interrupt, ADC, PM};
