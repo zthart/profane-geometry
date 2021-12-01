@@ -20,8 +20,6 @@ use hal::time::KiloHertz;
 
 use pac::{interrupt, CorePeripherals, Peripherals};
 
-use cortex_m::asm::delay as cycle_delay;
-
 use core::cell::{Cell, RefCell};
 
 use cortex_m::interrupt::Mutex;
@@ -37,7 +35,7 @@ static ADC_INSTANCE: Mutex<RefCell<Option<mcu::adc::Adc<pac::ADC>>>> =
     Mutex::new(RefCell::new(None));
 static ADC_CHANNELS: Mutex<RefCell<Option<[u8; TOTAL_INS]>>> = Mutex::new(RefCell::new(None));
 static ADC_RESULTS: Mutex<RefCell<[u16; TOTAL_INS]>> = Mutex::new(RefCell::new([0; TOTAL_INS]));
-static IN_CTR: Mutex<Cell<u8>> = Mutex::new(Cell::new(TOTAL_INS as u8));
+static IN_CTR: Mutex<Cell<u8>> = Mutex::new(Cell::new(0));
 
 // A nice little convenience here lets us ignore both the full pin name (e.g. PA11, PB10, etc.)
 // _and_ the exact pin configuration (into_alternate::<A>() or into_push_pull_output()).
@@ -45,8 +43,9 @@ static IN_CTR: Mutex<Cell<u8>> = Mutex::new(Cell::new(TOTAL_INS as u8));
 // the appropriate type nicely.
 //
 // If we want to use pwm here, we could use bsp::NtSliderLedPwm instead.
-static INT_LED: Mutex<RefCell<Option<bsp::NtSliderLed>>> =
-    Mutex::new(RefCell::new(None));
+static INT_LED: Mutex<RefCell<Option<bsp::NtSliderLed>>> = Mutex::new(RefCell::new(None));
+
+static POWER_LED: Mutex<RefCell<Option<bsp::PowerLed>>> = Mutex::new(RefCell::new(None));
 
 static DAC_ADDRESS: u8 = 0b01100000;
 
@@ -86,7 +85,7 @@ fn pg_create_inputs(mut pins: bsp::Pins) {
 
     let v_oct_: bsp::VOct = pins.v_oct.into(); // v/oct scaled
     let pwm_cv_: bsp::PwmCv = pins.pwm_cv.into(); // pulse scaled
-    let pwm_pot_: bsp::PwmPot=  pins.pwm_pot.into(); // pulse pot
+    let pwm_pot_: bsp::PwmPot = pins.pwm_pot.into(); // pulse pot
 
     cortex_m::interrupt::free(|cs| {
         PG_INPUTS.borrow(cs).replace(Some([
@@ -111,7 +110,7 @@ fn main() -> ! {
     let mut peripherals = Peripherals::take().unwrap();
     let mut core = CorePeripherals::take().unwrap();
 
-    let mut clocks = GenericClockController::with_external_32kosc(
+    let mut clocks = GenericClockController::with_internal_32kosc(
         peripherals.GCLK,
         &mut peripherals.PM,
         &mut peripherals.SYSCTRL,
@@ -119,6 +118,17 @@ fn main() -> ! {
     );
     let gclk0 = clocks.gclk0();
     let pins = bsp::Pins::new(peripherals.PORT);
+
+    // First things first - turn our power LED on. We've definitely got power.
+    {
+        let mut power_led: bsp::PowerLed = pins.power_led.into();
+        power_led.set_high().unwrap();
+
+        // Give up the power LED to anyone that may need it later. Potentially useful for debug/error codes.
+        cortex_m::interrupt::free(|cs| {
+            POWER_LED.borrow(cs).replace(Some(power_led));
+        });
+    }
 
     // Configure i2c
     let mut dac = {
@@ -154,7 +164,7 @@ fn main() -> ! {
 
         let v_oct_: bsp::VOct = pins.v_oct.into(); // v/oct scaled
         let pwm_cv_: bsp::PwmCv = pins.pwm_cv.into(); // pulse scaled
-        let pwm_pot_: bsp::PwmPot=  pins.pwm_pot.into(); // pulse pot
+        let pwm_pot_: bsp::PwmPot = pins.pwm_pot.into(); // pulse pot
 
         let input_channels: [u8; TOTAL_INS] = [
             Adc::get_pin_channel(v_oct_),
@@ -212,8 +222,6 @@ fn main() -> ! {
         pwm2
     };
 
-    let _red_led: bsp::PowerLedPwm = pins.power_led.into();
-
     let mut pulse_led: bsp::PlsSliderLed = pins.pls_slider_led.into();
     let mut square_led: bsp::SqSliderLed = pins.sq_slider_led.into();
     let _tri_led: bsp::TriSliderLedPwm = pins.tri_slider_led.into();
@@ -222,7 +230,7 @@ fn main() -> ! {
     {
         // pulse_led.set_high().unwrap();
         // square_led.set_high().unwrap();
-        pwm1.set_duty(Channel::_1, pwm1.get_max_duty());
+        // pwm1.set_duty(Channel::_1, pwm1.get_max_duty());
     }
 
     let mut status_ctr = 0;
@@ -285,7 +293,7 @@ fn main() -> ! {
         }
 
         status_ctr += 1;
-        cycle_delay(1024 * 1024);
+        // cycle_delay(1024 * 1024);
     }
 }
 
